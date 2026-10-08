@@ -26,7 +26,15 @@ the CSVs in `results/`.
 streamlit run app.py
 ```
 
-Opens in the browser. Choose the gate split (or Undivided), QR adoption,
+If Windows says `streamlit` is not recognised, start it through Python instead:
+
+```
+python -m streamlit run app.py
+```
+
+Opens in the browser at http://localhost:8501 (paste the address in if it does
+not open by itself); keep the terminal open while using it and press Ctrl+C
+there to stop. Choose the gate split (or Undivided), QR adoption,
 mean arrival rate and number of replications, then press **Run**. The app
 calls the same model as the experiments (`src/model.py`); it does not simulate
 anything itself. A typical run of 5 replications takes about 2 seconds.
