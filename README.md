@@ -4,6 +4,10 @@ Discrete-event simulation (Python + SimPy) of the seven entry turnstiles at the
 LRT-1 EDSA Station Side A concourse during the 16:00–20:00 after-office surge.
 CSS142P Modeling and Simulation — Aldea, De Leon, Jerusalem.
 
+**Live app:** https://lrt1-edsa-gates.streamlit.app/ — no install needed. It
+sleeps after 12 hours without visitors; the first visit after that takes about
+a minute to wake it.
+
 ## How to run
 
 ```
