@@ -1,6 +1,6 @@
 """
 plots.py - Figure generation (spec Section 7, Figures 1-8, plus Figure 9 for
-the sensitivity analysis).
+the sensitivity analysis and Figure 10 for the adoption threshold).
 
 Project : After-Office Surge at the LRT-1 EDSA Interchange
 Course  : CSS142P Modeling and Simulation, Mapua University
@@ -120,7 +120,7 @@ def rows_for(table, p_qr):
 # =============================================================================
 
 # Undivided sits apart on the left: it is the benchmark, not an allocation.
-CONFIG_X = {"Undivided": 0.0, "6/1": 1.4, "5/2": 2.4, "4/3": 3.4, "3/4": 4.4}
+CONFIG_X = {"Undivided": 0.0, "6/1": 1.4, "5/2": 2.4, "4/3": 3.4, "3/4": 4.4, "2/5": 5.4}
 
 
 def config_axis(ax, params):
@@ -129,7 +129,7 @@ def config_axis(ax, params):
               for c in CONFIG_X]
     ax.set_xticks(list(CONFIG_X.values()), labels)
     ax.axvline(0.7, color=LIGHT, linewidth=0.8)
-    ax.set_xlim(-0.5, 4.9)
+    ax.set_xlim(-0.5, max(CONFIG_X.values()) + 0.5)
     ax.set_xlabel("Gate allocation, Bank A / Bank B")
     ax.grid(axis="x", visible=False)
 
@@ -323,8 +323,9 @@ def figure_6(optimal, params):
     for share, config in zip(shares, optimal["best_by_wait"]):
         ax_alloc.annotate(config, (share, int(config.split("/")[1])), xytext=(0, -14),
                           textcoords="offset points", ha="center", fontsize=8)
-    ax_alloc.set_yticks(range(1, 5))
-    ax_alloc.set_ylim(0.4, 4.6)
+    top = max(4, *(gates_on_b(c).max() for c in ("best_by_wait", "best_by_queue", "best_by_clear")))
+    ax_alloc.set_yticks(range(1, top + 1))
+    ax_alloc.set_ylim(0.4, top + 0.6)
     ax_alloc.set_xticks(shares)
     ax_alloc.set_xlabel("beep QR adoption (% of passengers)")
     ax_alloc.set_ylabel("QR-only gates (Bank B) in best split")
@@ -463,8 +464,122 @@ def figure_9(sensitivity, params):
     save(fig, "fig9_sensitivity.png")
 
 
+def figure_10(threshold, params):
+    """
+    Figure 10: mean wait of the competing splits at QR adoption from 3% to
+    30% in 1-point steps, with the band where each split is best named at
+    the top and the threshold (where one more QR gate first helps
+    significantly) marked.
+    """
+    present = params.present_configuration
+    n_a, n_b = (int(n) for n in present.split("/"))
+    one_more = f"{n_a - 1}/{n_b + 1}"
+    shares = threshold["p_qr"].to_numpy() * 100
+    styles = [{"color": GREY, "marker": "o", "markerfacecolor": "white", "linestyle": "--"},
+              {"color": INK, "marker": "o", "markerfacecolor": INK, "linestyle": "-"},
+              {"color": INK, "marker": "s", "markerfacecolor": "white", "linestyle": "-."}]
+    fig, ax = plt.subplots(figsize=(7.0, 4.0))
+    for config, style in zip(params.threshold_configurations, styles):
+        column = f"Wq_{config.replace('/', '_')}_s"
+        label = f"{config} (present)" if config == present else config
+        ax.plot(shares, threshold[f"{column}_mean"], markersize=4, label=label, **style)
+        ax.fill_between(shares, threshold[f"{column}_ci_low"], threshold[f"{column}_ci_high"],
+                        color=style["color"], alpha=0.12, linewidth=0)
+    ax.set_yscale("log")
+    ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _p: f"{v:g}"))
+
+    # Name the band where each split has the lowest mean wait.
+    best = threshold["best"].to_numpy()
+    start = 0
+    for k in range(1, len(best) + 1):
+        if k == len(best) or best[k] != best[start]:
+            middle = (shares[start] + shares[k - 1]) / 2
+            ax.text(middle, 1.02, f"{best[start]} best", transform=ax.get_xaxis_transform(),
+                    ha="center", va="bottom", fontsize=8, color=GREY)
+            if k < len(best):
+                ax.axvline((shares[k - 1] + shares[k]) / 2, color=LIGHT, linewidth=0.8)
+            start = k
+
+    significant = threshold[threshold["present_minus_one_more_qr_gate_s_ci_low"] > 0]
+    if len(significant):
+        at = significant["p_qr"].min() * 100
+        ax.axvline(at, color=INK, linewidth=1.0, linestyle=":")
+        ax.annotate(f"{one_more} significantly better\nthan {present} from {at:g}%",
+                    xy=(at, 0.5), xycoords=("data", "axes fraction"), xytext=(6, 0),
+                    textcoords="offset points", fontsize=8, va="center")
+    ax.set_xlabel("beep QR adoption (% of passengers)")
+    ax.set_ylabel("Mean waiting time Wq (s, log scale)")
+    ax.set_title("When do two QR gates stop being enough? (shading: 95% CI)", pad=16)
+    ax.legend(loc="upper left", bbox_to_anchor=(1.01, 1.0))
+    save(fig, "fig10_threshold.png")
+
+
+def figure_model_flow():
+    """
+    Figure 0: process flow diagram of the conceptual model (proposal
+    Methodology step 3) - how a passenger moves through the simulation.
+    """
+    from matplotlib.patches import FancyBboxPatch
+
+    fig, ax = plt.subplots(figsize=(7.5, 8.2))
+    ax.set_xlim(0, 10)
+    ax.set_ylim(0, 12)
+    ax.axis("off")
+
+    def node(x, y, text, width=3.6, height=0.95, dashed=False, fill="white"):
+        """A rounded box centred on (x, y); returns its top and bottom centres."""
+        ax.add_patch(FancyBboxPatch((x - width / 2, y - height / 2), width, height,
+                                    boxstyle="round,pad=0.02,rounding_size=0.12",
+                                    facecolor=fill, edgecolor=INK, linewidth=0.9,
+                                    linestyle="--" if dashed else "-"))
+        ax.text(x, y, text, ha="center", va="center", fontsize=8.2, color=INK)
+        return (x, y + height / 2), (x, y - height / 2)
+
+    def arrow(start, end, label=None):
+        """An arrow between two box edges, with an optional label at its middle."""
+        ax.annotate("", xy=end, xytext=start,
+                    arrowprops={"arrowstyle": "-|>", "color": INK, "linewidth": 0.9})
+        if label:
+            ax.text((start[0] + end[0]) / 2 + 0.1, (start[1] + end[1]) / 2, label,
+                    fontsize=7.5, color=GREY, ha="left", va="center")
+
+    _top, train = node(2.6, 11.1, "MRT-3 train every 4 min\nbatch = 70 x 15-min block multiplier",
+                       width=4.3)
+    _top, street = node(7.4, 11.1, "Street-level arrivals\nPoisson, 0.5/min x block multiplier",
+                        width=4.3)
+    reach_top, reach = node(5.0, 9.45, "Passenger reaches the gate array\n"
+                                       "(train passengers spread Uniform 0-90 s)", width=4.6)
+    assign_top, assign = node(5.0, 7.85, "Fare medium: multinomial draw (beep, SJT, QR at adoption p)\n"
+                                         "Gate time: triangular, by medium", width=6.2)
+    check_top, check = node(5.0, 6.25, "Eligibility matrix:\nwhich gates may this passenger use?",
+                            width=4.0, fill="#eeeeee")
+    a_top, a_bottom = node(1.85, 4.3, "Bank A queue (FIFO)\nbeep + SJT, n_A gates", width=3.2)
+    b_top, b_bottom = node(5.0, 4.3, "Bank B queue (FIFO)\nQR only, n_B gates", width=2.8)
+    u_top, u_bottom = node(8.2, 4.3, "Undivided: one queue (FIFO)\nevery medium, 7 gates",
+                           width=3.2, dashed=True)
+    gate_top, gate = node(5.0, 2.55, "Gate service: hold one gate\nfor the passenger's gate time",
+                          width=4.0)
+    leave_top, _bottom = node(5.0, 0.95, "Depart to the platform\n"
+                                         "record wait, queue length and gate state", width=4.6)
+
+    arrow(train, (reach_top[0] - 1.2, reach_top[1]))
+    arrow(street, (reach_top[0] + 1.2, reach_top[1]))
+    arrow(reach, assign_top)
+    arrow(assign, check_top)
+    arrow((check[0] - 1.0, check[1]), a_top, "beep, SJT")
+    arrow(check, b_top, "QR")
+    arrow((check[0] + 1.0, check[1]), u_top, "any medium\n(Undivided)")
+    for bottom in (a_bottom, b_bottom, u_bottom):
+        arrow(bottom, gate_top)
+    arrow(gate, leave_top)
+    ax.text(0.1, 0.05, "Dashed: the Undivided configuration replaces both banks with one pool.",
+            fontsize=7.5, color=GREY)
+    ax.set_title("Process flow of the simulation model")
+    save(fig, "fig0_model_flow.png")
+
+
 def make_all_figures(params):
-    """Draw Figures 1-9. Figure 1 re-simulates one run; the rest read results/."""
+    """Draw Figures 0-10. Figure 1 re-simulates one run; the rest read results/."""
     apply_style()
 
     def read(name):
@@ -472,6 +587,7 @@ def make_all_figures(params):
         return pd.read_csv(RESULTS_DIR / name)
 
     summary = read("summary.csv")
+    figure_model_flow()
     figure_1(params)
     figure_2(summary, params)
     figure_3(summary, params)
@@ -482,6 +598,8 @@ def make_all_figures(params):
     figure_8(read("batch_vs_smooth.csv"), params)
     if (RESULTS_DIR / "sensitivity.csv").exists():
         figure_9(read("sensitivity.csv"), params)
+    if (RESULTS_DIR / "threshold.csv").exists():
+        figure_10(read("threshold.csv"), params)
 
 
 if __name__ == "__main__":

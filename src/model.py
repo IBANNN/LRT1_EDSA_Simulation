@@ -55,7 +55,10 @@ class Params:
     service_qr_sec: tuple = (3.5, 5.0, 8.0)
 
     # --- 3.5 Experiment grid -----------------------------------------------
-    configurations: tuple = ("Undivided", "6/1", "5/2", "4/3", "3/4")
+    # Every feasible split (proposal Objective 6: n_A swept from 2 to 7).
+    # 7/0 is infeasible whenever anyone holds a QR ticket: they would have
+    # no gate they are allowed to use.
+    configurations: tuple = ("Undivided", "6/1", "5/2", "4/3", "3/4", "2/5")
     present_configuration: str = "5/2"  # as observed, September 2026
     qr_shares: tuple = (0.03, 0.05, 0.10, 0.20, 0.30)
     replications: int = 30
@@ -74,12 +77,32 @@ class Params:
     sens_service_beep_scale: tuple = (0.8, 1.2)
     sens_service_sjt_scale: tuple = (0.8, 1.2)
     sens_service_qr_scale: tuple = (0.75, 1.25)
+    sens_beep_share: tuple = (0.70, 0.85)       # SJT takes the residual
     sens_qr_shares: tuple = (0.03, 0.10, 0.30)
+
+    # --- Threshold search (proposal Objective 8) -----------------------------
+    # QR adoption in 1-point steps, to locate where the best split changes.
+    threshold_qr_shares: tuple = tuple(round(0.03 + 0.01 * k, 2) for k in range(28))
+    threshold_configurations: tuple = ("6/1", "5/2", "4/3")
+
+    # --- Validation target (proposal assumption register) --------------------
+    # Side A entries in the surge window = daily station ridership x entry
+    # share x northbound share x share of the day in the 16:00-20:00 block.
+    published_daily_ridership: float = 52000.0
+    entry_share: float = 0.50
+    northbound_share: float = 0.60
+    surge_block_share: float = 0.28
 
     # --- Animation (spec Section 7) -------------------------------------------
     animation_start_min: float = 60.0   # 17:00, the start of the peak block
-    animation_minutes: float = 12.0     # three train cycles
-    animation_fps: int = 30
+    animation_minutes: float = 12.0     # app replay: three train cycles
+    # GIFs for the slides: two train cycles, one frame per simulated second
+    # at 15 frames a second. GIF frame times are whole hundredths of a
+    # second, so each frame is stored as 60 ms and the clip runs about 29 s.
+    # Changed from the spec's 12 minutes at 30 fps, which is too fast to
+    # follow on a slide.
+    gif_minutes: float = 8.0
+    animation_fps: int = 15
 
     # --- Unit conversions (the only place minutes become seconds) ----------
     @property
@@ -714,7 +737,8 @@ def measure(result, params):
     arrivals = result.arrivals
     t0, t1 = params.warmup_s, params.window_s
     counted = arrivals.times_s >= t0
-    metrics = {"Wq_s": float(np.mean(result.waits[counted])),
+    # A run with no passengers (the zero-load degeneracy test) has no waits.
+    metrics = {"Wq_s": float(np.mean(result.waits[counted])) if counted.any() else np.nan,
                "n_passengers": int(counted.sum())}
 
     for medium in MEDIA:

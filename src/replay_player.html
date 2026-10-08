@@ -1,0 +1,193 @@
+<!doctype html>
+<!--
+  replay_player.html - Browser player for the app's live replay.
+
+  It only draws: every position, gate state and counter comes from
+  replay_data() in src/animation.py (the same ConcourseScene that draws the
+  GIFs). app.py replaces __REPLAY_DATA__ with that data as JSON.
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { margin: 0; font-family: "Source Sans Pro", "Segoe UI", Arial, sans-serif; }
+  .card { background: #ffffff; color: #1a1a1a; border-radius: 10px; padding: 10px 12px 8px; }
+  .bar { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 4px; }
+  button { font: inherit; font-size: 14px; padding: 4px 16px; border: 1px solid #b5b5b5;
+           border-radius: 6px; background: #f4f4f4; color: #1a1a1a; cursor: pointer; min-width: 74px; }
+  button:hover { background: #e9e9e9; }
+  #clock { font-weight: 700; font-size: 20px; font-variant-numeric: tabular-nums; min-width: 92px; }
+  #scrub { flex: 1; min-width: 160px; accent-color: #0072B2; }
+  label { font-size: 14px; color: #555555; }
+  select { font: inherit; font-size: 14px; }
+  canvas { display: block; margin: 0 auto; }
+  .legend { display: flex; gap: 18px; flex-wrap: wrap; justify-content: center;
+            font-size: 13px; color: #555555; margin-top: 2px; }
+  .key { display: inline-flex; align-items: center; gap: 6px; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="bar">
+    <button id="play">Pause</button>
+    <span id="clock"></span>
+    <input id="scrub" type="range" min="0" value="0" aria-label="Replay time">
+    <label>Speed
+      <select id="speed" autocomplete="off">
+        <option value="5">5x</option>
+        <option value="10">10x</option>
+        <option value="30" selected>30x</option>
+        <option value="60">60x</option>
+      </select>
+    </label>
+  </div>
+  <canvas id="view"></canvas>
+  <div class="legend" id="legend"></div>
+</div>
+<script>
+const DATA = __REPLAY_DATA__;
+const G = DATA.geometry;
+const [W, H] = G.extent;          // one panel, in scene units
+const GAP = 0.5;                  // between panels
+const TOP = 0.8;                  // room above each panel for its title
+const MAX_CANVAS_HEIGHT = 560;    // px; keeps a single panel from growing too tall
+
+const canvas = document.getElementById("view");
+const ctx = canvas.getContext("2d");
+const playButton = document.getElementById("play");
+const clockText = document.getElementById("clock");
+const scrub = document.getElementById("scrub");
+const speed = document.getElementById("speed");
+const nFrames = DATA.clock.length;
+scrub.max = nFrames - 1;
+
+let scale = 40, offsetX = 0, frame = 0, playing = true, lastTime = null;
+
+// Scene units -> canvas pixels. y grows upward in the scene, downward on canvas.
+const px = (panel, x) => offsetX + (panel * (W + GAP) + x) * scale;
+const py = (y) => (TOP + H - y) * scale;
+
+function resize() {
+  // The frame can report zero width before the page has finished laying out,
+  // so never size the canvas below a usable minimum.
+  const width = Math.max(320, document.body.clientWidth - 24);
+  const worldWidth = DATA.panels.length * W + (DATA.panels.length - 1) * GAP;
+  scale = Math.min(width / worldWidth, MAX_CANVAS_HEIGHT / (H + TOP));
+  const cssWidth = worldWidth * scale, cssHeight = (H + TOP) * scale;
+  offsetX = 0;
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.round(cssWidth * dpr);
+  canvas.height = Math.round(cssHeight * dpr);
+  canvas.style.width = cssWidth + "px";
+  canvas.style.height = cssHeight + "px";
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  draw();
+}
+
+function rect(panel, x, y, w, h, fill, stroke) {
+  // Rectangle with its lower-left corner at scene point (x, y).
+  ctx.beginPath();
+  ctx.rect(px(panel, x), py(y + h), w * scale, h * scale);
+  if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+  if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = 1; ctx.stroke(); }
+}
+
+function text(panel, x, y, words, size, color, align = "left", font = "sans-serif", weight = "") {
+  ctx.font = `${weight} ${Math.max(9, size * scale)}px ${font}`;
+  ctx.fillStyle = color;
+  ctx.textAlign = align;
+  ctx.fillText(words, px(panel, x), py(y));
+}
+
+function marker(panel, x, y, shape, color) {
+  const cx = px(panel, x), cy = py(y), r = 0.13 * scale;
+  ctx.beginPath();
+  if (shape === "circle") {
+    ctx.arc(cx, cy, r, 0, 2 * Math.PI);
+  } else if (shape === "square") {
+    ctx.rect(cx - r * 0.9, cy - r * 0.9, r * 1.8, r * 1.8);
+  } else {
+    ctx.moveTo(cx, cy - r * 1.15);
+    ctx.lineTo(cx + r * 1.05, cy + r * 0.8);
+    ctx.lineTo(cx - r * 1.05, cy + r * 0.8);
+    ctx.closePath();
+  }
+  ctx.fillStyle = color;
+  ctx.fill();
+  ctx.strokeStyle = "#ffffff";
+  ctx.lineWidth = 1;
+  ctx.stroke();
+}
+
+function drawPanel(p, k) {
+  const panel = DATA.panels[p], f = panel.frames[k];
+  text(p, 0.1, H + 0.25, panel.title, 0.3, "#1a1a1a", "left", "sans-serif", "600");
+
+  // Static scene (platform, corridor, TVMs, booths, labels): drawn from the
+  // shape list in src/animation.py, the same one the GIFs use.
+  for (const s of panel.shapes) {
+    if (s.kind === "rect") rect(p, s.x, s.y, s.w, s.h, s.fill, s.stroke);
+    else text(p, s.x, s.y, s.text, s.size, s.color, s.align);
+  }
+
+  const [gw, gh] = G.gateSize;
+  for (const [bank, gates] of Object.entries(panel.gates)) {
+    gates.forEach(([x, y], g) => rect(p, x - gw / 2, y - gh / 2, gw, gh,
+                                       DATA.gateFill[f.g[bank][g]], "#555555"));
+  }
+
+  for (const [x, y, m] of f.p) marker(p, x, y, DATA.media[m].shape, DATA.media[m].color);
+
+  f.r.forEach((line, i) => text(p, 0.3, 11.75 - i * 0.42, line, 0.26, "#1a1a1a", "left", "monospace"));
+}
+
+function draw() {
+  const k = Math.min(nFrames - 1, Math.floor(frame));
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  DATA.panels.forEach((_, p) => drawPanel(p, k));
+  clockText.textContent = DATA.clock[k];
+  scrub.value = k;
+}
+
+function tick(now) {
+  if (playing) {
+    if (lastTime !== null) {
+      // `speed` simulated seconds (frames) per real second; loop at the end.
+      frame = (frame + (now - lastTime) / 1000 * Number(speed.value)) % nFrames;
+    }
+    lastTime = now;
+    draw();
+  }
+  requestAnimationFrame(tick);
+}
+
+playButton.addEventListener("click", () => {
+  playing = !playing;
+  lastTime = null;
+  playButton.textContent = playing ? "Pause" : "Play";
+});
+scrub.addEventListener("input", () => { frame = Number(scrub.value); lastTime = null; draw(); });
+window.addEventListener("resize", resize);
+
+// Legend: one key per fare medium, plus the gate tints.
+const legend = document.getElementById("legend");
+const shapes = { circle: '<circle cx="7" cy="7" r="5"/>', square: '<rect x="2.5" y="2.5" width="9" height="9"/>',
+                 triangle: '<polygon points="7,1.5 12.5,11.5 1.5,11.5"/>' };
+DATA.media.forEach((m) => {
+  legend.insertAdjacentHTML("beforeend", `<span class="key"><svg width="14" height="14" fill="${m.color}">` +
+    `${shapes[m.shape]}</svg>${m.label}</span>`);
+});
+[["b", "gate busy"], ["i", "gate idle"], ["x", "idle gate the queue cannot use"]].forEach(([code, label]) => {
+  legend.insertAdjacentHTML("beforeend", `<span class="key"><svg width="14" height="14">` +
+    `<rect x="1" y="1" width="12" height="12" fill="${DATA.gateFill[code]}" stroke="#555"/></svg>${label}</span>`);
+});
+
+// Start the clock first, so a drawing problem can never stop playback.
+requestAnimationFrame(tick);
+resize();
+window.addEventListener("load", resize);
+</script>
+</body>
+</html>

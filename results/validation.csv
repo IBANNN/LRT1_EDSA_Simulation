@@ -1,0 +1,6 @@
+test,expected,observed,result
+passengers served per surge window vs published ridership,"4,368 (52,000 x 0.5 x 0.6 x 0.28)","4,334 (-0.8%)",PASS
+"zero load: passengers, utilisation, peak queue, blocked capacity",all 0,"0, 0, 0, 0, 0, 0",PASS
+very light load (1 passenger per train): longest wait,0 s,0 s,PASS
+"saturating load (M/M/7, rho = 1.2): queue left at 20:00","6,900 = (lambda - c mu) x 240 min","6,876",PASS
+"saturating load (M/M/7, rho = 1.2): gate utilisation",>= 0.99,1.0000,PASS

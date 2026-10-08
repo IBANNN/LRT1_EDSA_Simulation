@@ -9,7 +9,7 @@ Authors : Aldea, De Leon, Jerusalem
 Run from the project root:
     python -m src.experiments          everything, in order (about 25 minutes)
     python -m src.experiments SWEEP    one step only; the steps are
-                                       A B C D SWEEP SENS FIGURES ANIM
+                                       A B C D VALID SWEEP THRESH SENS FIGURES ANIM
 """
 
 import math
@@ -26,7 +26,7 @@ from src.model import (MEDIA, Params, batch_arrivals, blocked_capacity_gate_min,
                        exponential_arrivals, fare_mix, gate_layout,
                        idle_gates_while_queue_s, mean_triangular, measure,
                        mix_service_stats, mmc_arrivals, simulate, smooth_arrivals,
-                       smooth_profile_arrivals, step_integral)
+                       smooth_profile_arrivals, state_at, step_integral)
 from src.animation import make_animations
 from src.plots import make_all_figures
 
@@ -546,6 +546,184 @@ def run_batch_vs_smooth(runs, params):
     return pd.DataFrame(rows)
 
 
+def recommendations(runs, params):
+    """
+    results/recommendations.csv (proposal Objective 9, Expected Outputs 5
+    and 9): for each QR share and each passenger class (all, beep, SJT, QR),
+    the mean wait under Undivided, the present split and the recommended
+    (lowest-wait) split, plus two paired differences with 95% CIs:
+
+      cost_of_division_present : present split minus Undivided, per class
+      change_if_recommended    : recommended minus present split, per class
+                                 (negative means shorter waits)
+    """
+    present = params.present_configuration
+    divided = [c for c in params.configurations if c != "Undivided"]
+    classes = (("all", "Wq_s"), ("beep", "Wq_beep_s"), ("SJT", "Wq_sjt_s"), ("QR", "Wq_qr_s"))
+    rows = []
+    for p_qr in params.qr_shares:
+        level = runs[np.isclose(runs["p_qr"], p_qr)]
+        cell = {c: level[level["config"] == c].set_index("rep") for c in params.configurations}
+        best = min(divided, key=lambda c: cell[c]["Wq_s"].mean())
+        for label, column in classes:
+            row = {"p_qr": p_qr, "recommended": best, "passenger_class": label,
+                   "Wq_undivided_s": cell["Undivided"][column].mean(),
+                   "Wq_present_s": cell[present][column].mean(),
+                   "Wq_recommended_s": cell[best][column].mean()}
+            add_mean_ci(row, "cost_of_division_present_s",
+                        cell[present][column] - cell["Undivided"][column], params)
+            add_mean_ci(row, "change_if_recommended_s",
+                        cell[best][column] - cell[present][column], params)
+            rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def run_threshold_search(params):
+    """
+    results/threshold.csv (proposal Objective 8, Expected Output 6): mean
+    Wq of the splits in params.threshold_configurations at QR adoption from
+    3% to 30% in 1-point steps, the best split at each level, and the paired
+    difference between the present split and the split with one more QR
+    gate (positive means the extra QR gate would help).
+
+    The adoption threshold at which the present QR provision ceases to be
+    sufficient is the lowest level at which that difference is positive
+    with its whole 95% CI above zero. Returns (table, threshold or None).
+    """
+    present = params.present_configuration
+    n_a, n_b = (int(n) for n in present.split("/"))
+    one_more = f"{n_a - 1}/{n_b + 1}"
+    configs = params.threshold_configurations
+    reps = range(params.replications)
+    rows = []
+    for p_qr in params.threshold_qr_shares:
+        arrivals = [batch_arrivals(p_qr, params, rep) for rep in reps]
+        wq = {c: np.array([measure(simulate(a, c, params), params)["Wq_s"] for a in arrivals])
+              for c in configs}
+        row = {"p_qr": p_qr, "best": min(configs, key=lambda c: wq[c].mean())}
+        for config in configs:
+            add_mean_ci(row, f"Wq_{config.replace('/', '_')}_s", wq[config], params)
+        add_mean_ci(row, "present_minus_one_more_qr_gate_s", wq[present] - wq[one_more], params)
+        rows.append(row)
+        print(f"  threshold p_qr={p_qr:.2f}: best {row['best']}  {present} minus {one_more} = "
+              f"{row['present_minus_one_more_qr_gate_s_mean']:+.3f}s "
+              f"[{row['present_minus_one_more_qr_gate_s_ci_low']:+.3f}, "
+              f"{row['present_minus_one_more_qr_gate_s_ci_high']:+.3f}]")
+    table = pd.DataFrame(rows)
+    significant = table[table["present_minus_one_more_qr_gate_s_ci_low"] > 0]
+    threshold = float(significant["p_qr"].min()) if len(significant) else None
+    return table, threshold
+
+
+# =============================================================================
+# VALIDATION AND DEGENERACY TESTS (proposal Methodology, step 5)
+# =============================================================================
+
+def clock_time(seconds):
+    """Seconds after 16:00 as clock time to a hundredth, e.g. 17:00:03.42."""
+    whole = int(seconds)
+    return (f"{16 + whole // 3600}:{(whole % 3600) // 60:02d}:"
+            f"{whole % 60 + (seconds - whole):05.2f}")
+
+
+def run_validation(params):
+    """
+    results/validation.csv: one row per test with expected value, observed
+    value and PASS/FAIL.
+
+      1. Volume against published ridership: passengers served per surge
+         window, against daily ridership x entry share x northbound share x
+         surge-block share (pass within 5%).
+      2. Zero load: with no passengers, the model must show no queue, no
+         busy gates and no blocked capacity.
+      3. Very light load: one passenger per train and no background, so
+         nobody should ever wait.
+      4. Saturating load: M/M/7 at rho = 1.2 has no steady state; the queue
+         must grow at lambda - c*mu, so the queue left when arrivals stop
+         should be within 5% of (lambda - c*mu) x window, with every gate
+         busy at least 99% of the time.
+    """
+    present = params.present_configuration
+    rows = []
+
+    def add(test, expected, observed, passed):
+        """Record one test result."""
+        rows.append({"test": test, "expected": expected, "observed": observed,
+                     "result": "PASS" if passed else "FAIL"})
+        print(f"  {'PASS' if passed else 'FAIL'}  {test}: expected {expected}; observed {observed}")
+
+    # 1. Volume against published ridership.
+    target = (params.published_daily_ridership * params.entry_share
+              * params.northbound_share * params.surge_block_share)
+    served = [int(np.sum(~np.isnan(simulate(batch_arrivals(params.share_qr, params, rep),
+                                             present, params).finished)))
+              for rep in range(params.replications)]
+    mean_served = float(np.mean(served))
+    add("passengers served per surge window vs published ridership",
+        f"{target:,.0f} (52,000 x 0.5 x 0.6 x 0.28)",
+        f"{mean_served:,.0f} ({(mean_served / target - 1) * 100:+.1f}%)",
+        abs(mean_served / target - 1) <= 0.05)
+
+    # 2. Zero load.
+    empty = replace(params, batch_size=0.0, background_rate_per_min=0.0)
+    metrics = measure(simulate(batch_arrivals(params.share_qr, empty, 0), present, empty), empty)
+    zero = [metrics["n_passengers"], metrics["rho_A"], metrics["rho_B"],
+            metrics["Lq_max_A"], metrics["Lq_max_B"], metrics["T_blk_gate_min"]]
+    add("zero load: passengers, utilisation, peak queue, blocked capacity", "all 0",
+        ", ".join(f"{v:g}" for v in zero), all(v == 0 for v in zero))
+
+    # 3. Very light load.
+    light = replace(params, batch_size=1.0, background_rate_per_min=0.0)
+    longest = max(np.nanmax(simulate(batch_arrivals(params.share_qr, light, rep), present,
+                                     light).waits) for rep in range(params.replications))
+    add("very light load (1 passenger per train): longest wait", "0 s", f"{longest:g} s",
+        longest == 0)
+
+    # 4. Saturating load.
+    c = params.total_gates
+    mu_per_s = 1.0 / mix_service_stats(params, params.share_qr)[0]
+    lam_per_s = 1.2 * c * mu_per_s
+    growth = (lam_per_s - c * mu_per_s) * params.window_s
+    left, busy = [], []
+    for rep in range(5):
+        result = simulate(mmc_arrivals(lam_per_s, mu_per_s, params, rep), "Undivided", params)
+        times, waiting, _busy = result.logs["All"]
+        left.append(float(state_at(times, waiting, params.window_s)))
+        busy.append(measure(result, params)["rho_All"])
+    add("saturating load (M/M/7, rho = 1.2): queue left at 20:00",
+        f"{growth:,.0f} = (lambda - c mu) x 240 min", f"{np.mean(left):,.0f}",
+        abs(np.mean(left) / growth - 1) <= 0.05)
+    add("saturating load (M/M/7, rho = 1.2): gate utilisation", ">= 0.99",
+        f"{np.mean(busy):.4f}", np.mean(busy) >= 0.99)
+    return pd.DataFrame(rows)
+
+
+def write_event_trace(params, n_passengers=60):
+    """
+    results/event_trace_sample.csv, for event-trace inspection: the first
+    `n_passengers` to arrive after 17:00 in replication 0 of the present
+    split at the base QR share, with every event time. Each row can be
+    checked by hand: service start = arrival + wait, and departure =
+    service start + service time; the function also checks this itself.
+    """
+    result = simulate(batch_arrivals(params.share_qr, params, 0),
+                      params.present_configuration, params)
+    a = result.arrivals
+    first = int(np.searchsorted(a.times_s, 3600.0))
+    rows = []
+    for i in range(first, first + n_passengers):
+        start = a.times_s[i] + result.waits[i]
+        if not np.isclose(result.finished[i], start + a.service_s[i]):
+            raise AssertionError(f"passenger {i}: departure is not start + service")
+        rows.append({"passenger": i, "arrival": clock_time(a.times_s[i]), "medium": a.media[i],
+                     "bank": result.bank[i], "gate": int(result.gate_index[i]) + 1,
+                     "wait_s": round(float(result.waits[i]), 3),
+                     "service_start": clock_time(start),
+                     "service_s": round(float(a.service_s[i]), 3),
+                     "departure": clock_time(result.finished[i])})
+    return pd.DataFrame(rows)
+
+
 # =============================================================================
 # SENSITIVITY ANALYSIS - one factor at a time about the base case
 # =============================================================================
@@ -559,6 +737,8 @@ def sensitivity_cases(params):
       scales with it (70 x h / 4): more, smaller trains at 3 min; fewer,
       larger ones at 5 min. Varying demand itself is the batch-size case.
     - Service-time cases scale all three triangular points by the factor.
+    - The beep-share cases follow the register: SJT takes the residual, so
+      the beep:SJT ratio becomes 70:27 or 85:12.
     - The last case combines the largest batch with the shortest dispersal:
       the densest bursts the ranges allow.
     """
@@ -587,6 +767,9 @@ def sensitivity_cases(params):
     for factor in params.sens_service_qr_scale:
         cases.append(("QR service", f"x{factor:g}",
                       replace(params, service_qr_sec=scaled(params.service_qr_sec, factor))))
+    for share in params.sens_beep_share:
+        cases.append(("beep card share", f"{share * 100:g}%",
+                      replace(params, share_beep=share, share_sjt=1 - share - params.share_qr)))
     densest = replace(params, batch_size=max(params.sens_batch_size),
                       dispersal_sec=min(params.sens_dispersal_sec))
     cases.append(("combined", f"batch {max(params.sens_batch_size):g} + "
@@ -657,8 +840,8 @@ def main():
     """Run the requested stages (default: all) and write results to results/."""
     params = Params()
     RESULTS_DIR.mkdir(exist_ok=True)
-    stages = [s.upper() for s in sys.argv[1:]] or ["A", "B", "C", "D", "SWEEP", "SENS",
-                                                   "FIGURES", "ANIM"]
+    stages = [s.upper() for s in sys.argv[1:]] or ["A", "B", "C", "D", "VALID", "SWEEP",
+                                                   "THRESH", "SENS", "FIGURES", "ANIM"]
 
     if "A" in stages:
         print(f"Stage A: M/M/c verification ({params.replications} replications per load)")
@@ -698,6 +881,13 @@ def main():
         print_table(table)
         print()
 
+    if "VALID" in stages:
+        print("Validation and degeneracy tests")
+        run_validation(params).to_csv(RESULTS_DIR / "validation.csv", index=False)
+        write_event_trace(params).to_csv(RESULTS_DIR / "event_trace_sample.csv", index=False)
+        print("  wrote results/event_trace_sample.csv")
+        print()
+
     if "SWEEP" in stages:
         n_runs = len(params.configurations) * len(params.qr_shares) * params.replications
         print(f"Experiment sweep: {n_runs} runs, batch arrivals")
@@ -708,6 +898,15 @@ def main():
         optimal_allocation(runs, params).to_csv(RESULTS_DIR / "optimal_allocation.csv", index=False)
         print(f"Batch versus smooth arrivals under {params.present_configuration}")
         run_batch_vs_smooth(runs, params).to_csv(RESULTS_DIR / "batch_vs_smooth.csv", index=False)
+        recommendations(runs, params).to_csv(RESULTS_DIR / "recommendations.csv", index=False)
+        print()
+
+    if "THRESH" in stages:
+        print("Adoption threshold search, 1-point steps")
+        table, threshold = run_threshold_search(params)
+        table.to_csv(RESULTS_DIR / "threshold.csv", index=False)
+        found = f"{threshold:.0%}" if threshold is not None else "not reached within the range"
+        print(f"  two QR gates cease to be sufficient at: {found}")
         print()
 
     if "SENS" in stages:
