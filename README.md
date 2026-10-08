@@ -83,6 +83,7 @@ simulate anything itself. A typical run of 5 replications takes about 2 seconds.
 | `results/recommendations.csv` | Recommended split per QR share, with cost of division and expected change per passenger class. |
 | `results/threshold.csv` | QR adoption from 3% to 30% in 1-point steps: where two QR gates stop being enough. |
 | `results/sensitivity.csv`, `sensitivity_optimal.csv` | One-factor-at-a-time sensitivity analysis. |
+| `figures/concourse_layout.png`, `concourse_layout_deck.png` | The Side A concourse as observed (report Figure 1), in greyscale for print and in the deck's colours. |
 | `figures/fig0`–`fig10` | Figure 0 (process flow), Figures 1–8 of the spec, Figure 9 (sensitivity) and Figure 10 (adoption threshold). |
 | `figures/animation_5_2.gif`, `animation_comparison.gif` | 8-minute replay from 17:00 (two train cycles) played in about 29 s for slides; 5/2 alone, and 5/2 beside Undivided on the same passengers. |
 

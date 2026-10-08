@@ -516,66 +516,208 @@ def figure_10(threshold, params):
 
 def figure_model_flow():
     """
-    Figure 0: process flow diagram of the conceptual model (proposal
-    Methodology step 3) - how a passenger moves through the simulation.
+    Figure 0: process flow of the conceptual model (proposal Methodology
+    step 3) - the path of one passenger through the simulation. Sized to the
+    report's figure slot (2240 x 2536 px).
     """
-    from matplotlib.patches import FancyBboxPatch
+    from matplotlib.patches import FancyBboxPatch, Polygon
 
-    fig, ax = plt.subplots(figsize=(7.5, 8.2))
-    ax.set_xlim(0, 10)
-    ax.set_ylim(0, 12)
+    fig = plt.figure(figsize=(5.6, 6.34))
+    ax = fig.add_axes([0, 0, 1, 1])
+    ax.set_xlim(0, 100)
+    ax.set_ylim(0, 113)
     ax.axis("off")
 
-    def node(x, y, text, width=3.6, height=0.95, dashed=False, fill="white"):
-        """A rounded box centred on (x, y); returns its top and bottom centres."""
-        ax.add_patch(FancyBboxPatch((x - width / 2, y - height / 2), width, height,
-                                    boxstyle="round,pad=0.02,rounding_size=0.12",
-                                    facecolor=fill, edgecolor=INK, linewidth=0.9,
-                                    linestyle="--" if dashed else "-"))
-        ax.text(x, y, text, ha="center", va="center", fontsize=8.2, color=INK)
-        return (x, y + height / 2), (x, y - height / 2)
+    def box(x, y, w, h, title, lines=(), rounded=False, dashed=False, italic_last=False):
+        """A box centred on (x, y): bold title over smaller lines; returns its edges."""
+        style = f"round,pad=0,rounding_size={h / 2 if rounded else 0.6}"
+        ax.add_patch(FancyBboxPatch((x - w / 2, y - h / 2), w, h, boxstyle=style,
+                                    facecolor="white", edgecolor=INK,
+                                    linewidth=1.1, linestyle="--" if dashed else "-"))
+        n = len(lines)
+        ax.text(x, y + 1.45 * n, title, ha="center", va="center", fontsize=8.6,
+                fontweight="bold", color=INK)
+        for k, line in enumerate(lines):
+            last = italic_last and k == n - 1
+            ax.text(x, y + 1.45 * n - 2.9 * (k + 1), line, ha="center", va="center",
+                    fontsize=7.2, color=GREY if last else INK, style="italic" if last else "normal")
+        return {"top": (x, y + h / 2), "bottom": (x, y - h / 2),
+                "left": (x - w / 2, y), "right": (x + w / 2, y)}
 
-    def arrow(start, end, label=None):
-        """An arrow between two box edges, with an optional label at its middle."""
-        ax.annotate("", xy=end, xytext=start,
-                    arrowprops={"arrowstyle": "-|>", "color": INK, "linewidth": 0.9})
-        if label:
-            ax.text((start[0] + end[0]) / 2 + 0.1, (start[1] + end[1]) / 2, label,
-                    fontsize=7.5, color=GREY, ha="left", va="center")
+    def arrow(points):
+        """A line through `points` with an arrowhead at the last one."""
+        xs, ys = zip(*points)
+        if len(points) > 2:
+            ax.plot(xs[:-1], ys[:-1], color=INK, linewidth=1.1)
+        ax.annotate("", xy=points[-1], xytext=points[-2],
+                    arrowprops={"arrowstyle": "-|>", "color": INK, "linewidth": 1.1,
+                                "mutation_scale": 11})
 
-    _top, train = node(2.6, 11.1, "MRT-3 train every 4 min\nbatch = 70 x 15-min block multiplier",
-                       width=4.3)
-    _top, street = node(7.4, 11.1, "Street-level arrivals\nPoisson, 0.5/min x block multiplier",
-                        width=4.3)
-    reach_top, reach = node(5.0, 9.45, "Passenger reaches the gate array\n"
-                                       "(train passengers spread Uniform 0-90 s)", width=4.6)
-    assign_top, assign = node(5.0, 7.85, "Fare medium: multinomial draw (beep, SJT, QR at adoption p)\n"
-                                         "Gate time: triangular, by medium", width=6.2)
-    check_top, check = node(5.0, 6.25, "Eligibility matrix:\nwhich gates may this passenger use?",
-                            width=4.0, fill="#eeeeee")
-    a_top, a_bottom = node(1.85, 4.3, "Bank A queue (FIFO)\nbeep + SJT, n_A gates", width=3.2)
-    b_top, b_bottom = node(5.0, 4.3, "Bank B queue (FIFO)\nQR only, n_B gates", width=2.8)
-    u_top, u_bottom = node(8.2, 4.3, "Undivided: one queue (FIFO)\nevery medium, 7 gates",
-                           width=3.2, dashed=True)
-    gate_top, gate = node(5.0, 2.55, "Gate service: hold one gate\nfor the passenger's gate time",
-                          width=4.0)
-    leave_top, _bottom = node(5.0, 0.95, "Depart to the platform\n"
-                                         "record wait, queue length and gate state", width=4.6)
+    start = box(50, 105, 34, 8, "PASSENGER ARRIVES", ["at the unpaid concourse"], rounded=True)
+    ax.text(3, 108.5, "Two arrival streams", fontsize=7.2, fontweight="bold", color=INK)
+    ax.text(3, 101.5, "batch: one burst per MRT-3 train,\nspread over the footbridge walk\n"
+                      "background: Poisson, street level", fontsize=6.6, color=INK, va="bottom",
+            linespacing=1.35)
+    assign = box(50, 90, 46, 10, "ASSIGN FARE MEDIUM",
+                 ["multinomial draw over p_svc, p_sjt, p_qr",
+                  "gate time: triangular, by fare medium"])
+    arrow([start["bottom"], assign["top"]])
 
-    arrow(train, (reach_top[0] - 1.2, reach_top[1]))
-    arrow(street, (reach_top[0] + 1.2, reach_top[1]))
-    arrow(reach, assign_top)
-    arrow(assign, check_top)
-    arrow((check[0] - 1.0, check[1]), a_top, "beep, SJT")
-    arrow(check, b_top, "QR")
-    arrow((check[0] + 1.0, check[1]), u_top, "any medium\n(Undivided)")
-    for bottom in (a_bottom, b_bottom, u_bottom):
-        arrow(bottom, gate_top)
-    arrow(gate, leave_top)
-    ax.text(0.1, 0.05, "Dashed: the Undivided configuration replaces both banks with one pool.",
-            fontsize=7.5, color=GREY)
-    ax.set_title("Process flow of the simulation model")
-    save(fig, "fig0_model_flow.png")
+    # Decision diamond: the fare medium alone decides the bank.
+    cx, cy, half_w, half_h = 50, 73, 18, 8
+    ax.add_patch(Polygon([(cx, cy + half_h), (cx + half_w, cy), (cx, cy - half_h),
+                          (cx - half_w, cy)], closed=True, facecolor="white",
+                         edgecolor=INK, linewidth=1.1))
+    ax.text(cx, cy, "Which fare\nmedium?", ha="center", va="center", fontsize=8.6,
+            fontweight="bold", color=INK, linespacing=1.2)
+    arrow([assign["bottom"], (cx, cy + half_h)])
+
+    queue_a = box(23, 55, 36, 9, "JOIN BANK A QUEUE", ["5 gates, FIFO", "no access to Bank B"],
+                  italic_last=True)
+    queue_b = box(77, 55, 36, 9, "JOIN BANK B QUEUE", ["2 gates, FIFO", "no access to Bank A"],
+                  italic_last=True)
+    arrow([(cx - half_w, cy), (23, cy), queue_a["top"]])
+    arrow([(cx + half_w, cy), (77, cy), queue_b["top"]])
+    ax.text(21.5, cy - 4, "beep / SJT", ha="right", va="center", fontsize=7.4,
+            fontweight="bold", color=INK)
+    ax.text(78.5, cy - 4, "beep QR", ha="left", va="center", fontsize=7.4,
+            fontweight="bold", color=INK)
+
+    wait_a = box(23, 42, 36, 7, "WAIT FOR A FREE GATE", ["start of recorded wait"], italic_last=True)
+    wait_b = box(77, 42, 36, 7, "WAIT FOR A FREE GATE", ["start of recorded wait"], italic_last=True)
+    arrow([queue_a["bottom"], wait_a["top"]])
+    arrow([queue_b["bottom"], wait_b["top"]])
+
+    occupy = box(50, 26, 46, 10, "OCCUPY GATE",
+                 ["held for the passenger's gate time", "beep fastest, QR slowest"],
+                 italic_last=True)
+    ax.plot([23, 23, 77, 77], [wait_a["bottom"][1], 34, 34, wait_b["bottom"][1]],
+            color=INK, linewidth=1.1)
+    arrow([(50, 34), occupy["top"]])
+
+    release = box(50, 13.5, 40, 8, "RELEASE GATE", ["record wait, queue length and gate state"])
+    arrow([occupy["bottom"], release["top"]])
+    finish = box(50, 3.8, 34, 6.4, "ENTER PLATFORM", [], rounded=True)
+    arrow([release["bottom"], finish["top"]])
+
+    ax.text(97, 26, "Undivided configuration:\nthe decision is removed;\nall seven gates form one\n"
+                    "pool every medium may use", ha="right", va="center", fontsize=6.6,
+            color=GREY, style="italic", linespacing=1.3)
+    with plt.rc_context({"savefig.bbox": "standard"}):     # exact size, no trimming
+        fig.savefig(FIGURES_DIR / "fig0_model_flow.png", dpi=400)
+    plt.close(fig)
+    print("  wrote figures/fig0_model_flow.png")
+
+
+# Two looks for the concourse layout: greyscale for the printed report, and
+# the presentation deck's own green (beep/SJT) and orange (QR) palette.
+LAYOUT_LOOKS = {
+    "report": {"paid": "#e4e4e4", "corridor": "#f5f5f5", "card_gate": "white",
+               "qr_gate": "#5a5a5a", "booth": "#d6d6d6", "ink": INK, "muted": GREY,
+               "accent": INK, "font": None, "file": "concourse_layout.png"},
+    "deck": {"paid": "#dcefe2", "corridor": "#f4f4f4", "card_gate": "#4a9b6e",
+             "qr_gate": "#c4761a", "booth": "#ececec", "ink": "#1c4330", "muted": "#5b7a68",
+             "accent": "#24543a", "font": "Calibri", "file": "concourse_layout_deck.png"},
+}
+
+
+def figure_concourse_layout(look="report"):
+    """
+    The Side A entry concourse as observed (report Figure 1). Passengers walk
+    up the unpaid corridor from the MRT-3 footbridge and meet the two QR-only
+    gates first; a short walk further up are the five gates for beep cards
+    and Single Journey Tickets, beside the ticket vending machines, with the
+    staffed ticket booths off the corridor. Through any gate lies the paid
+    side and the northbound platform. Sized to the report's figure slot
+    (2600 x 1760 px).
+    """
+    from matplotlib.patches import FancyArrowPatch, Rectangle
+
+    c = LAYOUT_LOOKS[look]
+    font = {"fontfamily": c["font"]} if c["font"] else {}
+    fig = plt.figure(figsize=(6.5, 4.4))
+    ax = fig.add_axes([0, 0, 1, 1])
+    ax.set_xlim(0, 130)
+    ax.set_ylim(0, 88)
+    ax.axis("off")
+
+    def label(x, y, text, size=7.4, weight="normal", color=None, ha="left", va="center",
+              style="normal"):
+        """Plain text in the layout's look."""
+        ax.text(x, y, text, fontsize=size, fontweight=weight, color=color or c["ink"],
+                ha=ha, va=va, style=style, linespacing=1.25, **font)
+
+    def area(x, y, w, h, fill, edge=None, dashed=False, hatch=None):
+        """A filled region of the station."""
+        ax.add_patch(Rectangle((x, y), w, h, facecolor=fill, edgecolor=edge or fill,
+                               linewidth=0.9, linestyle="--" if dashed else "-", hatch=hatch))
+
+    def walk(start, end, curve=0.0, width=1.2):
+        """An arrow for passengers walking."""
+        ax.add_patch(FancyArrowPatch(start, end, arrowstyle="-|>", mutation_scale=11,
+                                     color=c["accent"], linewidth=width,
+                                     connectionstyle=f"arc3,rad={curve}"))
+
+    # Paid side and platform (top left), unpaid corridor (centre), booths (right).
+    area(4, 44, 50, 40, c["paid"])
+    label(7, 80, "PAID SIDE  ·  PLATFORM", 8.2, "bold")
+    label(7, 76, "northbound, toward Fernando Poe Jr.", 6.8, color=c["muted"], style="italic")
+    area(56, 2, 46, 82, c["corridor"], edge=c["muted"], dashed=True)
+    label(58.5, 22, "UNPAID CORRIDOR", 7.6, "bold", color=c["muted"])
+    area(105, 52, 22, 32, c["booth"], edge=c["muted"], hatch="////" if look == "report" else None)
+    ax.text(116, 72, "Ticket booths", fontsize=7.8, fontweight="bold", color=c["ink"],
+            ha="center", va="center",
+            bbox={"boxstyle": "round,pad=0.3", "facecolor": "white", "edgecolor": "none"}, **font)
+    ax.text(116, 65.5, "staffed;\nnot modelled", fontsize=6.8, color=c["muted"], ha="center",
+            va="center", style="italic", linespacing=1.25,
+            bbox={"boxstyle": "round,pad=0.3", "facecolor": "white", "edgecolor": "none"}, **font)
+
+    # Bank A: five card gates in a column on the corridor's left wall, top.
+    gate_ys = [80, 74.5, 69, 63.5, 58]
+    for y in gate_ys:
+        ax.add_patch(Rectangle((52.6, y - 2.0), 6.0, 4.0, facecolor=c["card_gate"],
+                               edgecolor=c["ink"], linewidth=1.0))
+        walk((51.8, y), (44.5, y), width=0.9)
+    label(62, 78, "BANK A  ·  5 gates", 8.4, "bold")
+    label(62, 73.5, "beep card and SJT only", 7.4)
+    label(62, 69.5, "QR tickets rejected", 7.0, color=c["muted"], style="italic")
+
+    # Ticket vending machines beside the lowest card gates.
+    ax.add_patch(Rectangle((62, 51.5), 13, 4.4, facecolor="white", edgecolor=c["muted"],
+                           linewidth=0.9))
+    label(68.5, 53.7, "TVMs", 7.2, "bold", color=c["muted"], ha="center")
+
+    # Bank B: two QR gates at the corridor's mouth onto the paid side, met first.
+    for x in (46.5, 53.0):
+        ax.add_patch(Rectangle((x - 2.6, 42.0), 5.2, 4.0, facecolor=c["qr_gate"],
+                               edgecolor=c["ink"], linewidth=1.0))
+        walk((x, 46.6), (x, 52.5), width=0.9)
+    label(43, 39.5, "BANK B  ·  2 gates", 8.4, "bold", ha="right")
+    label(43, 35.5, "beep QR only", 7.4, ha="right")
+    label(43, 31.8, "cards and SJT rejected", 7.0, color=c["muted"], ha="right", style="italic")
+
+    # The walk: up from the footbridge, QR gates first, card gates a short walk on.
+    walk((82, 3), (82, 28), width=1.6)
+    label(84, 13, "from the MRT-3\nfootbridge, one\nburst per train", 6.8, color=c["muted"])
+    walk((81, 30), (56.8, 43.6), curve=-0.15)
+    label(59.5, 29, "QR holders", 7.0, "bold")
+    walk((80.5, 31), (80.5, 49))
+    label(82.5, 40, "card holders:\na short walk on\n(about 20 paces)", 6.8, "bold")
+    walk((82, 58), (60.5, 63.5), curve=0.2)
+    label(29, 61, "no choice:\nthe fare medium\ndecides the bank", 7.4, "bold", ha="center",
+          color=c["accent"])
+
+    # What the model covers.
+    ax.add_patch(Rectangle((4, 4), 44, 22, facecolor="white", edgecolor=c["ink"], linewidth=0.9))
+    label(7, 21.5, "System modelled", 7.8, "bold")
+    label(7, 17.5, "7 entry gates, strictly split 5 / 2\n"
+                   "entry only; exit uses a separate route\n"
+                   "decision: the split, and whether to keep it", 7.0, va="top")
+
+    with plt.rc_context({"savefig.bbox": "standard"}):     # exact size, no trimming
+        fig.savefig(FIGURES_DIR / c["file"], dpi=400)
+    plt.close(fig)
+    print(f"  wrote figures/{c['file']}")
 
 
 def make_all_figures(params):
@@ -588,6 +730,8 @@ def make_all_figures(params):
 
     summary = read("summary.csv")
     figure_model_flow()
+    figure_concourse_layout("report")
+    figure_concourse_layout("deck")
     figure_1(params)
     figure_2(summary, params)
     figure_3(summary, params)
